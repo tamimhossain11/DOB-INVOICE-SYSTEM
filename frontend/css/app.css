@@ -264,6 +264,27 @@ table.data tbody tr:hover td { background: #fafcfb; }
 
 .due-amount { color: var(--red); }
 
+/* Programme checklist in the "add client" dialog */
+.assign-list {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.assign-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.assign-row:last-child { border-bottom: none; }
+.assign-row:hover { background: var(--green-soft); }
+.assign-row input { width: auto; margin: 0; }
+.assign-name { flex: 1; font-weight: 600; }
+.assign-rate { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+
 /* Outstanding-balance banner shown when a client is picked on an invoice */
 .client-due {
   border-radius: 10px;

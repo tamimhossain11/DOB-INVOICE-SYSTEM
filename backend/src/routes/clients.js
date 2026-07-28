@@ -28,7 +28,9 @@ const BALANCE_SQL = `
     COALESCE(v.invoice_count, 0)                                    AS invoice_count,
     COALESCE(v.billed, 0)                                           AS billed,
     COALESCE(v.paid, 0)                                             AS paid,
-    c.opening_balance + COALESCE(v.billed, 0) - COALESCE(v.paid, 0) AS due
+    c.opening_balance + COALESCE(v.billed, 0) - COALESCE(v.paid, 0) AS due,
+    COALESCE(ci.committed, 0)                                       AS committed,
+    COALESCE(ci.committed, 0) - COALESCE(v.billed, 0)               AS left_to_invoice
   FROM clients c
   LEFT JOIN (
     SELECT client_id,
@@ -39,6 +41,11 @@ const BALANCE_SQL = `
     WHERE status NOT IN ('draft', 'cancelled') AND client_id IS NOT NULL
     GROUP BY client_id
   ) v ON v.client_id = c.id
+  LEFT JOIN (
+    SELECT client_id, SUM(quantity * rate) AS committed
+    FROM client_items
+    GROUP BY client_id
+  ) ci ON ci.client_id = c.id
 `;
 
 /* -------------------------------------------------------------------- list */
@@ -67,8 +74,62 @@ router.get('/', (req, res) => {
     r.billed = round2(r.billed);
     r.paid = round2(r.paid);
     r.due = round2(r.due);
+    r.committed = round2(r.committed);
+    r.left_to_invoice = round2(r.left_to_invoice);
   }
   res.json(rows);
+});
+
+/* ----------------------------------------------------------------- summary */
+
+/** Totals across every client — what has been billed, collected and is owed. */
+router.get('/summary', (req, res) => {
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(*)                     AS clients,
+         COALESCE(SUM(billed), 0)     AS billed,
+         COALESCE(SUM(paid), 0)       AS collected,
+         COALESCE(SUM(due), 0)        AS due,
+         COALESCE(SUM(committed), 0)  AS committed,
+         COALESCE(SUM(opening_balance), 0) AS opening_balance
+       FROM (${BALANCE_SQL}) b
+       WHERE b.client_id IN (SELECT id FROM clients WHERE archived = 0)`
+    )
+    .get();
+
+  const owing = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM (${BALANCE_SQL}) b
+       WHERE b.due > 0 AND b.client_id IN (SELECT id FROM clients WHERE archived = 0)`
+    )
+    .get().n;
+
+  // Invoices not tied to a saved client still represent real money.
+  const unlinked = db
+    .prepare(
+      `SELECT COALESCE(SUM(total), 0) AS billed, COALESCE(SUM(amount_paid), 0) AS collected,
+              COALESCE(SUM(total - amount_paid), 0) AS due, COUNT(*) AS n
+       FROM invoices
+       WHERE client_id IS NULL AND status NOT IN ('draft','cancelled')`
+    )
+    .get();
+
+  res.json({
+    clients: row.clients,
+    clients_owing: owing,
+    opening_balance: round2(row.opening_balance),
+    billed: round2(row.billed),
+    collected: round2(row.collected),
+    due: round2(row.due),
+    committed: round2(row.committed),
+    unlinked: {
+      invoices: unlinked.n,
+      billed: round2(unlinked.billed),
+      collected: round2(unlinked.collected),
+      due: round2(unlinked.due),
+    },
+  });
 });
 
 /* ------------------------------------------------------------- balance only */
@@ -83,6 +144,8 @@ router.get('/:id/balance', (req, res) => {
     billed: round2(row.billed),
     paid: round2(row.paid),
     due: round2(row.due),
+    committed: round2(row.committed),
+    left_to_invoice: round2(row.left_to_invoice),
     invoice_count: row.invoice_count,
   });
 });
@@ -182,6 +245,8 @@ router.get('/:id/statement', (req, res) => {
       billed: round2(totals.billed),
       paid: round2(totals.paid),
       due: round2(totals.due),
+      committed: round2(totals.committed),
+      left_to_invoice: round2(totals.left_to_invoice),
       invoice_count: totals.invoice_count,
       overdue,
     },

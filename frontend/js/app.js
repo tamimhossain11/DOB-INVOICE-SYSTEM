@@ -1049,10 +1049,47 @@ async function viewClients() {
     <button class="btn btn-primary" id="add-client">＋ Add client</button>`);
 
   const render = async () => {
-    state.clients = await api('/clients');
-    const totalDue = state.clients.reduce((s, c) => s + num(c.due), 0);
+    const [clients, summary] = await Promise.all([api('/clients'), api('/clients/summary')]);
+    state.clients = clients;
+    const cur = state.settings.currency;
 
-    view.innerHTML = `<div class="card">${
+    const unlinkedNote = summary.unlinked.invoices
+      ? `<div class="alert" style="background:var(--amber-soft);color:var(--amber);border-color:#f0dcb8">
+           ${summary.unlinked.invoices} invoice${summary.unlinked.invoices === 1 ? '' : 's'}
+           worth ${cur} ${money(summary.unlinked.billed)} are not linked to a saved client, so they are
+           not counted above. ${cur} ${money(summary.unlinked.due)} of that is still outstanding.
+         </div>`
+      : '';
+
+    view.innerHTML = `
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-label">Total billed</div>
+          <div class="stat-value">${cur} ${money(summary.billed)}</div>
+          <div class="stat-note">${summary.clients} client${summary.clients === 1 ? '' : 's'}${
+            summary.opening_balance > 0 ? ` · ${money(summary.opening_balance)} carried in` : ''
+          }</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total collected</div>
+          <div class="stat-value">${cur} ${money(summary.collected)}</div>
+          <div class="stat-note">across every client</div>
+        </div>
+        <div class="stat accent-red">
+          <div class="stat-label">Total due</div>
+          <div class="stat-value">${cur} ${money(summary.due)}</div>
+          <div class="stat-note">${summary.clients_owing} client${
+            summary.clients_owing === 1 ? '' : 's'
+          } owing</div>
+        </div>
+        <div class="stat accent-amber">
+          <div class="stat-label">Committed but not invoiced</div>
+          <div class="stat-value">${cur} ${money(Math.max(0, summary.committed - summary.billed))}</div>
+          <div class="stat-note">of ${money(summary.committed)} agreed</div>
+        </div>
+      </div>
+      ${unlinkedNote}
+      <div class="card">${
       state.clients.length
         ? `<div class="table-wrap"><table class="data">
              <thead><tr>
@@ -1079,8 +1116,10 @@ async function viewClients() {
                )
                .join('')}</tbody>
              <tfoot><tr>
-               <td colspan="6" class="strong">Total outstanding across all clients</td>
-               <td class="num mono strong due-amount">${money(totalDue)}</td>
+               <td colspan="4" class="strong">All clients</td>
+               <td class="num mono strong">${money(summary.billed)}</td>
+               <td class="num mono strong">${money(summary.collected)}</td>
+               <td class="num mono strong due-amount">${money(summary.due)}</td>
                <td></td>
              </tr></tfoot>
            </table></div>`
@@ -1146,6 +1185,30 @@ function clientModal(client, onDone) {
         </div>
       </div>
 
+      ${
+        client
+          ? ''
+          : `<div class="field">
+               <label>Assign programmes</label>
+               ${
+                 state.programmes.length
+                   ? `<div class="assign-list">
+                        ${state.programmes
+                          .map(
+                            (p) => `<label class="assign-row">
+                              <input type="checkbox" class="c-prog" value="${p.id}">
+                              <span class="assign-name">${esc(p.name)}</span>
+                              <span class="assign-rate">${money(p.default_rate)}</span>
+                            </label>`
+                          )
+                          .join('')}
+                      </div>
+                      <div class="hint">Assigned at the default rate. Adjust rates and quantities on the client page afterwards.</div>`
+                   : '<div class="hint">No programmes yet — add some under Programmes first.</div>'
+               }
+             </div>`
+      }
+
       <div class="field" style="margin-bottom:0"><label>Internal notes</label><textarea id="c-notes" rows="2">${esc(
         c.notes
       )}</textarea></div>`,
@@ -1160,8 +1223,27 @@ function clientModal(client, onDone) {
         opening_balance: $('#c-opening', root).value,
         opening_balance_note: $('#c-opening-note', root).value,
       };
-      if (client) await api(`/clients/${client.id}`, { method: 'PUT', body });
-      else await api('/clients', { method: 'POST', body });
+      if (client) {
+        await api(`/clients/${client.id}`, { method: 'PUT', body });
+      } else {
+        const created = await api('/clients', { method: 'POST', body });
+
+        const picked = $$('.c-prog:checked', root)
+          .map((cb) => state.programmes.find((p) => String(p.id) === cb.value))
+          .filter(Boolean)
+          .map((p) => ({
+            programme_id: p.id,
+            kind: 'programme',
+            description: p.name,
+            details: p.description,
+            quantity: 1,
+            rate: p.default_rate,
+          }));
+
+        if (picked.length) {
+          await api(`/clients/${created.id}/items`, { method: 'PUT', body: { items: picked } });
+        }
+      }
       close();
       toast(client ? 'Client updated.' : 'Client added.');
       await onDone();
@@ -1248,8 +1330,22 @@ async function viewClientStatement(id) {
                  )
                  .join('')}</tbody>
              </table></div>
-             <div class="card-body" style="padding-top:0">
-               <div class="hint">These pre-fill a new invoice for this client. Nothing is charged until the invoice is saved.</div>
+             <div class="card-body">
+               <div class="totals-box" style="max-width:460px">
+                 <div class="total-line"><span>Committed (agreed items)</span><strong>${money(totals.committed)}</strong></div>
+                 <div class="total-line"><span>Invoiced so far</span><strong>− ${money(totals.billed)}</strong></div>
+                 <div class="total-line grand">
+                   <span>${totals.left_to_invoice < 0 ? 'Invoiced beyond the agreement' : 'Left to invoice'}</span>
+                   <span>${cur} ${money(Math.abs(totals.left_to_invoice))}</span>
+                 </div>
+               </div>
+               <div class="hint" style="margin-top:10px">
+                 ${
+                   totals.left_to_invoice < 0
+                     ? 'More has been invoiced than was agreed. Check the assigned items or the invoices.'
+                     : 'Agreed items pre-fill a new invoice for this client. Nothing is charged until the invoice is saved.'
+                 }
+               </div>
              </div>`
           : `<div class="empty">
                <div class="empty-title">No agreed items yet</div>
