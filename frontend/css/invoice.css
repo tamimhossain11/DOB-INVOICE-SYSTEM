@@ -1,0 +1,339 @@
+/* Dreams of Bangladesh — printable invoice (A4) */
+
+:root {
+  --green: #00693e;
+  --green-dark: #00492b;
+  --green-tint: #eef6f2;
+  --red: #d81f35;
+  --red-tint: #fdeef0;
+  --ink: #17211c;
+  --muted: #6b7a72;
+  --line: #dfe7e2;
+  --paper: #ffffff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #eef1ef;
+  color: var(--ink);
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ------------------------------------------------------------------ toolbar */
+
+.toolbar {
+  max-width: 210mm;
+  margin: 16px auto 0;
+  padding: 0 4mm;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.toolbar-right { display: flex; gap: 8px; }
+
+.loading {
+  max-width: 210mm;
+  margin: 40px auto;
+  padding: 40px;
+  background: #fff;
+  border-radius: 10px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 600;
+}
+.loading.error { color: var(--red); }
+
+.btn {
+  display: inline-block;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.btn-ghost:hover { border-color: var(--green); color: var(--green); }
+.btn-primary {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--green-dark); border-color: var(--green-dark); }
+
+/* -------------------------------------------------------------------- sheet */
+
+.sheet {
+  position: relative;
+  width: 210mm;
+  min-height: 297mm;
+  margin: 16px auto 40px;
+  padding: 16mm 14mm 12mm;
+  background: var(--paper);
+  box-shadow: 0 6px 28px rgba(0, 40, 24, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Green / red band across the top edge — the brand signature on paper. */
+.sheet-stripe {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 7mm;
+  background: linear-gradient(90deg, var(--green) 0 72%, var(--red) 72% 100%);
+}
+
+/* --------------------------------------------------------------- head */
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--green);
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo { width: 58mm; height: auto; display: block; }
+.brand-name {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--green);
+}
+.brand-tag { font-size: 11px; color: var(--muted); }
+
+.doc { text-align: right; }
+.doc-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: var(--ink);
+  line-height: 1;
+}
+.doc-no {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--red);
+  letter-spacing: 0.04em;
+}
+.stamp {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  border: 1.5px solid currentColor;
+}
+.stamp-paid { color: var(--green); background: var(--green-tint); }
+.stamp-partial { color: #b26a00; background: #fff5e6; }
+.stamp-unpaid { color: var(--red); background: var(--red-tint); }
+.stamp-draft { color: var(--muted); background: #f2f5f3; }
+.stamp-cancelled { color: var(--muted); background: #f2f5f3; text-decoration: line-through; }
+
+/* ------------------------------------------------------------------ parties */
+
+.parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.9fr;
+  gap: 14px;
+  margin: 14px 0 16px;
+}
+.party { font-size: 12px; color: var(--ink); }
+.party-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.party-name { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+
+.dates { border-left: 3px solid var(--green-tint); padding-left: 12px; }
+.date-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+}
+.date-row span { color: var(--muted); }
+.total-chip {
+  margin-top: 6px;
+  padding: 7px 10px;
+  background: var(--green);
+  color: #fff;
+  border-radius: 6px;
+}
+.total-chip span { color: rgba(255, 255, 255, 0.85); }
+.total-chip strong { font-size: 14px; }
+
+/* -------------------------------------------------------------------- items */
+
+.items {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 14px;
+}
+.items thead th {
+  background: var(--green);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 9px 10px;
+  text-align: left;
+}
+.items tbody td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.items tbody tr:nth-child(even) td { background: #fafcfb; }
+
+.c-num { width: 26px; text-align: center; }
+.c-qty { width: 52px; text-align: right; }
+.c-rate { width: 90px; text-align: right; }
+.c-amt { width: 100px; text-align: right; font-weight: 600; }
+.items thead .c-qty, .items thead .c-rate, .items thead .c-amt { text-align: right; }
+.items thead .c-num { text-align: center; }
+
+.desc-main { font-weight: 600; }
+.desc-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+.tag-programme { background: var(--red-tint); color: var(--red); }
+.tag-service { background: var(--green-tint); color: var(--green); }
+.tag-product { background: #eef1f7; color: #3d5170; }
+
+/* --------------------------------------------------------------------- foot */
+
+.foot {
+  display: grid;
+  grid-template-columns: 1fr 78mm;
+  gap: 18px;
+  align-items: start;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.words {
+  padding: 9px 12px;
+  background: var(--green-tint);
+  border-left: 3px solid var(--green);
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 12px;
+}
+.words-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+.words-value { font-weight: 600; }
+
+.block { margin-bottom: 10px; }
+.block-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.block-body { font-size: 11.5px; white-space: normal; }
+
+.totals { width: 100%; border-collapse: collapse; }
+.totals td { padding: 6px 10px; }
+.totals td.v { text-align: right; font-weight: 600; white-space: nowrap; }
+.totals tr:not(.grand):not(.balance) td { border-bottom: 1px solid var(--line); }
+.totals .grand td {
+  background: var(--green);
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+}
+.totals .grand td:first-child { border-radius: 6px 0 0 6px; }
+.totals .grand td:last-child { border-radius: 0 6px 6px 0; }
+.totals .balance td {
+  background: var(--red-tint);
+  color: var(--red);
+  font-weight: 800;
+  border-top: 1px solid var(--red);
+}
+
+.sign { margin-top: 28px; text-align: center; }
+.sign-line { border-top: 1.5px solid var(--ink); margin-bottom: 5px; }
+.sign-label { font-size: 10px; color: var(--muted); }
+.sign-org { font-size: 11px; font-weight: 700; color: var(--green); }
+
+/* -------------------------------------------------------------------- terms */
+
+.terms {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.sheet-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 2px solid var(--red);
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* -------------------------------------------------------------------- print */
+
+@page { size: A4; margin: 0; }
+
+@media print {
+  body { background: #fff; }
+  .no-print { display: none !important; }
+  .sheet {
+    width: auto;
+    min-height: auto;
+    margin: 0;
+    box-shadow: none;
+    padding: 14mm 12mm 10mm;
+  }
+  .items thead { display: table-header-group; }
+  .items tr, .foot, .words, .sign { break-inside: avoid; }
+}
+
+/* ------------------------------------------------------------------- screen */
+
+@media screen and (max-width: 230mm) {
+  .sheet { width: auto; max-width: 100%; margin: 12px; padding: 14mm 6mm 10mm; }
+  .toolbar { padding: 0 12px; }
+  .parties { grid-template-columns: 1fr; }
+  .foot { grid-template-columns: 1fr; }
+  .logo { width: 46mm; }
+}

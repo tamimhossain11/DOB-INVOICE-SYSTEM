@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Dreams of Bangladesh Invoices</title>
+<link rel="icon" href="/assets/dob-logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-stripe"></div>
+    <div class="login-body">
+      <img class="login-logo" src="/assets/dob-logo.png" alt="Dreams of Bangladesh">
+      <h1 class="login-title">Invoice System</h1>
+      <p class="login-sub">Administrator sign in</p>
+
+      <div class="alert" id="error"></div>
+
+      <form id="form" autocomplete="on">
+        <div class="field">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required autocomplete="username" autofocus>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password">
+        </div>
+        <button class="btn btn-primary btn-block" type="submit" id="submit">Sign in</button>
+      </form>
+
+      <p class="login-foot">Dreams of Bangladesh &middot; Internal use only</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  const form = document.getElementById('form');
+  const errorBox = document.getElementById('error');
+  const submit = document.getElementById('submit');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorBox.textContent = '';
+    submit.disabled = true;
+    submit.textContent = 'Signing in…';
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Sign in failed.');
+      window.location.href = '/app';
+    } catch (err) {
+      errorBox.textContent = err.message;
+      submit.disabled = false;
+      submit.textContent = 'Sign in';
+    }
+  });
+</script>
+
+</body>
+</html>

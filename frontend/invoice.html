@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoice — Dreams of Bangladesh</title>
+<link rel="icon" href="/assets/dob-logo.png">
+<link rel="stylesheet" href="/css/invoice.css">
+</head>
+<body>
+
+<div class="toolbar no-print" id="toolbar" hidden>
+  <a class="btn btn-ghost" href="/app#/invoices">← Back to invoices</a>
+  <div class="toolbar-right">
+    <a class="btn btn-ghost" id="edit-link" href="#">Edit</a>
+    <button class="btn btn-primary" id="print-btn">Download / Print PDF</button>
+  </div>
+</div>
+
+<div id="sheet-root">
+  <div class="loading">Loading invoice…</div>
+</div>
+
+<script src="/js/invoice.js"></script>
+
+</body>
+</html>
