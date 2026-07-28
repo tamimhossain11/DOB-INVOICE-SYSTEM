@@ -429,6 +429,29 @@ table.data tfoot td {
 .modal-body { padding: 18px 20px; }
 .modal-foot { padding: 14px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 9px; }
 
+/* Invoice-created success panel */
+.modal.created { max-width: 440px; }
+.created-head {
+  padding: 26px 20px 20px;
+  text-align: center;
+  background: var(--green-soft);
+  border-bottom: 1px solid var(--green-line);
+}
+.created-tick {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: 24px;
+  line-height: 46px;
+  font-weight: 700;
+}
+.created-head h3 { margin: 0 0 3px; font-size: 17px; }
+.created-head p { margin: 0; font-size: 13px; color: var(--muted); }
+.created-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 16px; }
+
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 1000px) {

@@ -1061,13 +1061,81 @@ async function viewInvoiceForm(id, presetClientId) {
       const saved = editing
         ? await api(`/invoices/${id}`, { method: 'PUT', body: payload })
         : await api('/invoices', { method: 'POST', body: payload });
-      toast(editing ? 'Invoice updated.' : `Invoice ${saved.invoice_no} created.`);
-      window.location.hash = `#/invoice/${saved.id}/edit`;
-      if (editing) await router();
+
+      if (editing) {
+        toast('Invoice updated.');
+        await router();
+      } else {
+        await loadReference();
+        invoiceCreatedModal(saved);
+      }
     } catch (err) {
       errorBox.textContent = err.message;
       btn.disabled = false;
     }
+  });
+}
+
+/** Success panel shown once a new invoice exists, with what to do next. */
+function invoiceCreatedModal(inv) {
+  const cur = inv.currency || state.settings.currency;
+  const root = $('#modal-root');
+
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal created">
+        <div class="created-head">
+          <div class="created-tick">✓</div>
+          <h3>Invoice ${esc(inv.invoice_no)} created</h3>
+          <p>${esc(inv.client_name)}${inv.client_org ? ` · ${esc(inv.client_org)}` : ''}</p>
+        </div>
+
+        <div class="modal-body">
+          <div class="totals-box">
+            <div class="total-line"><span>Issued</span><strong>${prettyDate(inv.issue_date)}</strong></div>
+            <div class="total-line"><span>Due date</span><strong>${prettyDate(inv.due_date)}</strong></div>
+            <div class="total-line grand"><span>Total</span><span>${cur} ${money(inv.total)}</span></div>
+            ${
+              inv.amount_paid > 0
+                ? `<div class="total-line"><span>Paid</span><strong>− ${money(inv.amount_paid)}</strong></div>
+                   <div class="total-line ${inv.balance > 0 ? 'due' : ''}">
+                     <span>${inv.balance > 0 ? 'Balance due' : 'Settled in full'}</span>
+                     <strong>${cur} ${money(inv.balance)}</strong>
+                   </div>`
+                : ''
+            }
+          </div>
+
+          <div class="created-actions">
+            <a class="btn btn-primary btn-block" href="/invoice/${inv.id}" target="_blank" rel="noopener">
+              Print / Download PDF
+            </a>
+            <div class="grid grid-2" style="gap:9px">
+              <button class="btn" data-go="#/invoice/${inv.id}/edit">Open invoice</button>
+              <button class="btn" data-go="#/invoice/new">Create another</button>
+            </div>
+            ${
+              inv.client_id
+                ? `<button class="btn btn-block" data-go="#/client/${inv.client_id}">
+                     View ${esc(inv.client_name)}'s statement
+                   </button>`
+                : ''
+            }
+            <button class="btn btn-block" data-go="#/invoices">Back to all invoices</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const go = async (hash) => {
+    root.innerHTML = '';
+    if (window.location.hash === hash) await router();
+    else window.location.hash = hash;
+  };
+
+  $$('[data-go]', root).forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+  $('.modal-backdrop', root).addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) go(`#/invoice/${inv.id}/edit`);
   });
 }
 
