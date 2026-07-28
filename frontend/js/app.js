@@ -113,6 +113,25 @@ function modal({ title, body, confirmLabel = 'Save', danger = false, onConfirm }
   return { close, root };
 }
 
+/** Modal that resolves true if the user proceeds, false if they back out. */
+function askProceed({ title, body, proceedLabel }) {
+  return new Promise((resolve) => {
+    const { root } = modal({
+      title,
+      body,
+      confirmLabel: proceedLabel,
+      onConfirm: async (_r, close) => {
+        close();
+        resolve(true);
+      },
+    });
+    $$('[data-close]', root).forEach((b) => b.addEventListener('click', () => resolve(false)));
+    $('.modal-backdrop', root).addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) resolve(false);
+    });
+  });
+}
+
 function confirmDialog(title, message, onYes, confirmLabel = 'Delete') {
   modal({
     title,
@@ -1028,6 +1047,16 @@ async function viewInvoiceForm(id, presetClientId) {
           }),
     };
 
+    // A second invoice is the most common way people accidentally record a
+    // second payment. Catch it before it becomes bad data.
+    if (!editing && payload.client_id) {
+      const ok = await warnIfLooksLikeAPayment(payload);
+      if (!ok) {
+        btn.disabled = false;
+        return;
+      }
+    }
+
     try {
       const saved = editing
         ? await api(`/invoices/${id}`, { method: 'PUT', body: payload })
@@ -1039,6 +1068,75 @@ async function viewInvoiceForm(id, presetClientId) {
       errorBox.textContent = err.message;
       btn.disabled = false;
     }
+  });
+}
+
+/**
+ * Raising a second invoice is how people usually mis-record a second payment.
+ * If the client still owes money on an open invoice, or this invoice would take
+ * them past what they agreed to, say so before anything is written.
+ */
+async function warnIfLooksLikeAPayment(payload) {
+  let statement;
+  try {
+    statement = await api(`/clients/${payload.client_id}/statement`);
+  } catch {
+    return true; // never block on a failed check
+  }
+
+  const open = statement.invoices.filter(
+    (i) => i.balance > 0 && !['draft', 'cancelled'].includes(i.status)
+  );
+  const newTotal = payload.items.reduce((s, it) => s + num(it.quantity) * num(it.rate), 0);
+  const overshoot =
+    statement.totals.committed > 0 && statement.totals.left_to_invoice - newTotal < -0.005;
+
+  if (!open.length && !overshoot) return true;
+
+  const cur = state.settings.currency;
+  const exactMatch = open.find((i) => Math.abs(i.balance - newTotal) < 0.005);
+
+  return askProceed({
+    title: 'Is this a new invoice, or a payment?',
+    proceedLabel: 'No, it is a separate invoice',
+    body: `
+      ${
+        exactMatch
+          ? `<div class="alert" style="background:var(--amber-soft);color:var(--amber);border-color:#f0dcb8">
+               This is the exact amount still outstanding on
+               <strong>${esc(exactMatch.invoice_no)}</strong>. If ${esc(payload.client_name)}
+               has just paid that invoice, record it as a payment instead — raising another
+               invoice bills them twice.
+             </div>`
+          : ''
+      }
+      ${
+        open.length
+          ? `<p style="margin-top:0">${esc(payload.client_name)} still owes money on
+               ${open.length === 1 ? 'this invoice' : 'these invoices'}:</p>
+             <table class="data" style="margin-bottom:14px">
+               <thead><tr><th>Invoice</th><th class="num">Total</th><th class="num">Outstanding</th></tr></thead>
+               <tbody>${open
+                 .map(
+                   (i) => `<tr>
+                     <td class="strong">${esc(i.invoice_no)}</td>
+                     <td class="num mono">${money(i.total)}</td>
+                     <td class="num mono strong due-amount">${money(i.balance)}</td>
+                   </tr>`
+                 )
+                 .join('')}</tbody>
+             </table>`
+          : ''
+      }
+      ${
+        overshoot
+          ? `<p>Their agreed items come to <strong>${cur} ${money(statement.totals.committed)}</strong>,
+               of which <strong>${money(statement.totals.billed)}</strong> is already invoiced.
+               This invoice of <strong>${money(newTotal)}</strong> takes them past the agreement.</p>`
+          : ''
+      }
+      <p style="margin-bottom:0">Close this and use the <strong>Payment</strong> button on the
+         invoice above if money has come in. Continue only if this is genuinely additional work.</p>`,
   });
 }
 
