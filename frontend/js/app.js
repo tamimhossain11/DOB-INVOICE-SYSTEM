@@ -528,6 +528,7 @@ async function viewInvoiceForm(id, presetClientId) {
             </select>
           </div>
           <div class="card-body">
+            <div id="client-due"></div>
             <div class="grid grid-2">
               <div class="field">
                 <label>Client name *</label>
@@ -908,15 +909,78 @@ async function viewInvoiceForm(id, presetClientId) {
     recalc();
   });
 
-  $('#client-picker').addEventListener('change', (e) => {
+  /* ---- client due + assigned items ---- */
+
+  /**
+   * Shows what the client already owes, so the person raising the invoice can
+   * see the outstanding position before adding more to it.
+   */
+  async function showClientDue(clientId) {
+    const box = $('#client-due');
+    if (!clientId) {
+      box.innerHTML = '';
+      return;
+    }
+
+    try {
+      const b = await api(`/clients/${clientId}/balance`);
+      const cur = state.settings.currency;
+      const owing = b.due > 0;
+
+      box.innerHTML = `
+        <div class="client-due ${owing ? 'owing' : 'clear'}">
+          <div class="client-due-main">
+            <span class="client-due-label">Outstanding before this invoice</span>
+            <span class="client-due-value">${cur} ${money(b.due)}</span>
+          </div>
+          <div class="client-due-sub">
+            ${
+              owing
+                ? `opening ${money(b.opening_balance)} + billed ${money(b.billed)} − paid ${money(b.paid)}
+                   · <a href="#/client/${clientId}">full statement</a>`
+                : 'Nothing outstanding.'
+            }
+          </div>
+        </div>`;
+    } catch {
+      box.innerHTML = '';
+    }
+  }
+
+  /** Drops the client's agreed programmes/services in as ready-to-edit lines. */
+  async function applyAssignedItems(clientId) {
+    const items = await api(`/clients/${clientId}/items`);
+    if (!items.length) return;
+
+    const rows = $$('tr', linesBody);
+    const onlyBlank = rows.length === 1 && !$('.l-desc', rows[0]).value.trim();
+    if (onlyBlank) rows[0].remove();
+
+    items.forEach((it) => linesBody.appendChild(lineRow(it)));
+    recalc();
+    toast(`${items.length} assigned item${items.length === 1 ? '' : 's'} added.`);
+  }
+
+  $('#client-picker').addEventListener('change', async (e) => {
     const client = state.clients.find((c) => String(c.id) === e.target.value);
-    if (!client) return;
+    if (!client) {
+      $('#client-due').innerHTML = '';
+      return;
+    }
     $('#client_name').value = client.name;
     $('#client_org').value = client.organisation;
     $('#client_email').value = client.email;
     $('#client_phone').value = client.phone;
     $('#client_address').value = client.address;
+
+    await showClientDue(client.id);
+    if (!editing) await applyAssignedItems(client.id);
   });
+
+  if (inv.client_id) {
+    showClientDue(inv.client_id);
+    if (!editing && preset) applyAssignedItems(inv.client_id);
+  }
 
   ['#discount_value', '#discount_type', '#tax_rate', '#tax_label', '#amount_paid', '#currency'].forEach(
     (sel) => $(sel)?.addEventListener('input', recalc)
@@ -1109,7 +1173,7 @@ function clientModal(client, onDone) {
 
 async function viewClientStatement(id) {
   view.innerHTML = '<div class="empty">Loading…</div>';
-  const { client, totals, invoices, payments } = await api(`/clients/${id}/statement`);
+  const { client, totals, invoices, payments, assignedItems } = await api(`/clients/${id}/statement`);
   const cur = state.settings.currency;
 
   setPage(
@@ -1157,6 +1221,41 @@ async function viewClientStatement(id) {
           <div class="total-line grand"><span>Total due</span><span>${cur} ${money(totals.due)}</span></div>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head">
+        <h2>Agreed programmes &amp; services</h2>
+        <button class="btn btn-sm" id="edit-assigned">${
+          assignedItems.length ? 'Edit assigned items' : '＋ Assign items'
+        }</button>
+      </div>
+      ${
+        assignedItems.length
+          ? `<div class="table-wrap"><table class="data">
+               <thead><tr><th>Type</th><th>Item</th><th class="num">Qty</th><th class="num">Agreed rate</th><th class="num">Line total</th></tr></thead>
+               <tbody>${assignedItems
+                 .map(
+                   (it) => `<tr>
+                     <td><span class="pill pill-draft">${esc(it.kind)}</span></td>
+                     <td class="strong">${esc(it.description)}${
+                       it.details ? `<div class="hint">${esc(it.details)}</div>` : ''
+                     }</td>
+                     <td class="num mono">${num(it.quantity)}</td>
+                     <td class="num mono">${money(it.rate)}</td>
+                     <td class="num mono strong">${money(num(it.quantity) * num(it.rate))}</td>
+                   </tr>`
+                 )
+                 .join('')}</tbody>
+             </table></div>
+             <div class="card-body" style="padding-top:0">
+               <div class="hint">These pre-fill a new invoice for this client. Nothing is charged until the invoice is saved.</div>
+             </div>`
+          : `<div class="empty">
+               <div class="empty-title">No agreed items yet</div>
+               <div>Assign the programmes or services this client has agreed a rate for, and they will pre-fill their next invoice.</div>
+             </div>`
+      }
     </div>
 
     <div class="card" style="margin-bottom:18px">
@@ -1231,6 +1330,108 @@ async function viewClientStatement(id) {
       await viewClientStatement(id);
     })
   );
+
+  $('#edit-assigned').addEventListener('click', () =>
+    assignedItemsModal(client, assignedItems, () => viewClientStatement(id))
+  );
+}
+
+/** Editor for the programmes/services a client has an agreed rate for. */
+function assignedItemsModal(client, existing, onDone) {
+  modal({
+    title: `Agreed items — ${client.name}`,
+    confirmLabel: 'Save items',
+    body: `
+      <div class="row" style="margin-bottom:12px">
+        <select id="ai-programme" style="flex:1">
+          <option value="">＋ Add a programme…</option>
+          ${state.programmes
+            .map(
+              (p) =>
+                `<option value="${p.id}">${esc(p.name)}${
+                  p.default_rate ? ` · default ${money(p.default_rate)}` : ''
+                }</option>`
+            )
+            .join('')}
+        </select>
+        <button type="button" class="btn btn-sm" id="ai-blank">＋ Blank line</button>
+      </div>
+      <div class="table-wrap">
+        <table class="items-table">
+          <thead><tr>
+            <th class="w-kind">Type</th><th>Item</th>
+            <th class="w-qty">Qty</th><th class="w-rate">Rate</th><th class="w-x"></th>
+          </tr></thead>
+          <tbody id="ai-rows"></tbody>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        Leave an item's description blank to drop it. These pre-fill new invoices — they do not charge anything on their own.
+      </div>`,
+    onConfirm: async (root, close) => {
+      const items = $$('tr', $('#ai-rows', root)).map((tr) => ({
+        programme_id: tr.dataset.programmeId || null,
+        kind: $('.ai-kind', tr).value,
+        description: $('.ai-desc', tr).value.trim(),
+        details: $('.ai-details', tr).value.trim(),
+        quantity: $('.ai-qty', tr).value,
+        rate: $('.ai-rate', tr).value,
+      }));
+      await api(`/clients/${client.id}/items`, { method: 'PUT', body: { items } });
+      close();
+      toast('Agreed items saved.');
+      await onDone();
+    },
+  });
+
+  const rows = $('#ai-rows');
+
+  function addRow(item = {}) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <select class="ai-kind">
+          ${['programme', 'service', 'product']
+            .map(
+              (k) =>
+                `<option value="${k}" ${(item.kind || 'programme') === k ? 'selected' : ''}>${
+                  k[0].toUpperCase() + k.slice(1)
+                }</option>`
+            )
+            .join('')}
+        </select>
+      </td>
+      <td>
+        <input type="text" class="ai-desc" placeholder="Programme or service" value="${esc(item.description || '')}">
+        <input type="text" class="ai-details" placeholder="Details (optional)"
+               value="${esc(item.details || '')}" style="margin-top:5px">
+      </td>
+      <td><input type="number" step="0.01" min="0" class="ai-qty" value="${item.quantity ?? 1}"></td>
+      <td><input type="number" step="0.01" min="0" class="ai-rate" value="${item.rate ?? 0}"></td>
+      <td><button type="button" class="icon-btn ai-del" title="Remove">×</button></td>`;
+    tr.dataset.programmeId = item.programme_id || '';
+    $('.ai-del', tr).addEventListener('click', () => tr.remove());
+    rows.appendChild(tr);
+  }
+
+  (existing.length ? existing : [{}]).forEach(addRow);
+
+  $('#ai-blank').addEventListener('click', () => addRow());
+  $('#ai-programme').addEventListener('change', (e) => {
+    const p = state.programmes.find((x) => String(x.id) === e.target.value);
+    e.target.value = '';
+    if (!p) return;
+    const first = $$('tr', rows)[0];
+    if (first && rows.children.length === 1 && !$('.ai-desc', first).value.trim()) first.remove();
+    addRow({
+      programme_id: p.id,
+      kind: 'programme',
+      description: p.name,
+      details: p.description,
+      quantity: 1,
+      rate: p.default_rate,
+    });
+  });
 }
 
 /* ------------------------------------------------------------ programmes */

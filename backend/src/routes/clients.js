@@ -71,6 +71,67 @@ router.get('/', (req, res) => {
   res.json(rows);
 });
 
+/* ------------------------------------------------------------- balance only */
+
+/** Lightweight lookup for the invoice editor: what does this client owe? */
+router.get('/:id/balance', (req, res) => {
+  const row = db.prepare(`SELECT * FROM (${BALANCE_SQL}) WHERE client_id = ?`).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Client not found.' });
+  res.json({
+    client_id: row.client_id,
+    opening_balance: round2(row.opening_balance),
+    billed: round2(row.billed),
+    paid: round2(row.paid),
+    due: round2(row.due),
+    invoice_count: row.invoice_count,
+  });
+});
+
+/* ----------------------------------------------------------- assigned items */
+
+const ITEM_KINDS = new Set(['programme', 'service', 'product']);
+
+router.get('/:id/items', (req, res) => {
+  res.json(
+    db
+      .prepare('SELECT * FROM client_items WHERE client_id = ? ORDER BY position, id')
+      .all(req.params.id)
+  );
+});
+
+/** Replaces the client's whole assigned-item list in one call. */
+router.put('/:id/items', (req, res) => {
+  const client = db.prepare('SELECT id FROM clients WHERE id = ?').get(req.params.id);
+  if (!client) return res.status(404).json({ error: 'Client not found.' });
+
+  const items = (Array.isArray(req.body.items) ? req.body.items : [])
+    .map((it, i) => ({
+      client_id: client.id,
+      programme_id: it.programme_id ? Number(it.programme_id) : null,
+      kind: ITEM_KINDS.has(it.kind) ? it.kind : 'programme',
+      description: String(it.description || '').trim(),
+      details: String(it.details || '').trim(),
+      quantity: num(it.quantity) || 1,
+      rate: round2(num(it.rate)),
+      position: i,
+    }))
+    .filter((it) => it.description !== '');
+
+  const replace = db.transaction(() => {
+    db.prepare('DELETE FROM client_items WHERE client_id = ?').run(client.id);
+    const insert = db.prepare(
+      `INSERT INTO client_items (client_id, programme_id, kind, description, details, quantity, rate, position)
+       VALUES (@client_id, @programme_id, @kind, @description, @details, @quantity, @rate, @position)`
+    );
+    for (const it of items) insert.run(it);
+  });
+
+  replace();
+  res.json(
+    db.prepare('SELECT * FROM client_items WHERE client_id = ? ORDER BY position, id').all(client.id)
+  );
+});
+
 /* --------------------------------------------------------------- statement */
 
 /** Everything owed and paid by one client: totals, invoices and payments. */
@@ -109,8 +170,13 @@ router.get('/:id/statement', (req, res) => {
     )
     .get(client.id);
 
+  const assignedItems = db
+    .prepare('SELECT * FROM client_items WHERE client_id = ? ORDER BY position, id')
+    .all(client.id);
+
   res.json({
     client,
+    assignedItems,
     totals: {
       opening_balance: round2(totals.opening_balance),
       billed: round2(totals.billed),

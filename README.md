@@ -57,9 +57,32 @@ fee for, each with a default charge. Picking one on an invoice fills in the
 description and rate in a single click. A programme that already appears on an
 invoice is deactivated rather than deleted so past invoices never change.
 
-**Clients** — saved billing contacts. Invoices snapshot the client's details at
-the time they were raised, so editing a client later does not rewrite history.
-A client with invoices is archived rather than deleted.
+**Clients** — saved billing contacts, each with a running balance. Invoices
+snapshot the client's details at the time they were raised, so editing a client
+later does not rewrite history. A client with invoices is archived rather than
+deleted.
+
+Every client has a **statement** page showing what they owe and why:
+
+```
+Opening balance      +  money owed before this system
+Billed on invoices   +  every live invoice raised for them
+Payments received    −  every payment, listed individually
+= Total due
+```
+
+Draft and cancelled invoices are left out — they are not real debts.
+
+The statement also lists each invoice with its own balance, and the full
+payment history: date, which invoice it settled, method, reference and note.
+
+**Agreed programmes & services** — a client can be assigned the programmes or
+services they have a negotiated rate for. Starting a new invoice for that
+client pre-fills those lines, ready to edit. Assigning items charges nothing on
+its own; only a saved invoice does.
+
+When a client is selected on an invoice, their outstanding balance is shown
+above the form, so you can see what they already owe before adding to it.
 
 **Settings** — company details, payment instructions, default terms, invoice
 number format, currency, default tax rate, and your own admin name, email and

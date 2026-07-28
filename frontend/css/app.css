@@ -264,6 +264,33 @@ table.data tbody tr:hover td { background: #fafcfb; }
 
 .due-amount { color: var(--red); }
 
+/* Outstanding-balance banner shown when a client is picked on an invoice */
+.client-due {
+  border-radius: 10px;
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  border-left: 4px solid var(--green);
+  background: var(--green-soft);
+}
+.client-due.owing { border-left-color: var(--red); background: var(--red-soft); }
+.client-due-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.client-due-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.client-due-value { font-size: 19px; font-weight: 800; }
+.client-due.owing .client-due-value { color: var(--red); }
+.client-due.clear .client-due-value { color: var(--green); }
+.client-due-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
 table.data tfoot td {
   border-top: 2px solid var(--line);
   background: #fbfdfc;

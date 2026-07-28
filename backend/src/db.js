@@ -102,6 +102,23 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   position     INTEGER NOT NULL DEFAULT 0
 );
 
+-- Programmes and services a client has an agreed rate for. These pre-fill a
+-- new invoice for that client; they are not a charge until the invoice saves.
+CREATE TABLE IF NOT EXISTS client_items (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  programme_id INTEGER REFERENCES programmes(id) ON DELETE SET NULL,
+  kind         TEXT NOT NULL DEFAULT 'programme',
+  description  TEXT NOT NULL,
+  details      TEXT NOT NULL DEFAULT '',
+  quantity     REAL NOT NULL DEFAULT 1,
+  rate         REAL NOT NULL DEFAULT 0,
+  position     INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_items_client ON client_items(client_id);
+
 CREATE TABLE IF NOT EXISTS payments (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
