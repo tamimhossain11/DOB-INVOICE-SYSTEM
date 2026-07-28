@@ -392,100 +392,91 @@ async function renderInvoiceList() {
   );
 }
 
-async function paymentModal(id) {
-  const inv = await api(`/invoices/${id}`);
-  const methods = ['', 'bKash', 'Nagad', 'Rocket', 'Bank transfer', 'Cash', 'Cheque', 'Card', 'Other'];
+const PAYMENT_METHODS = ['', 'bKash', 'Nagad', 'Rocket', 'Bank transfer', 'Cash', 'Cheque', 'Card', 'Other'];
+
+/** Adds one payment to an invoice's ledger. Several add up as installments. */
+function addPaymentModal(inv, onDone) {
+  const cur = state.settings.currency;
 
   modal({
     title: `Record payment — ${inv.invoice_no}`,
-    confirmLabel: 'Save payment',
+    confirmLabel: 'Add payment',
     body: `
       <div class="totals-box" style="margin-bottom:14px">
-        <div class="total-line"><span>Invoice total</span><strong>${state.settings.currency} ${money(inv.total)}</strong></div>
-        <div class="total-line due"><span>Balance now</span><strong>${state.settings.currency} ${money(inv.balance)}</strong></div>
+        <div class="total-line"><span>Invoice total</span><strong>${cur} ${money(inv.total)}</strong></div>
+        <div class="total-line"><span>Already received</span><strong>− ${money(inv.amount_paid)}</strong></div>
+        <div class="total-line due"><span>Balance now</span><strong>${cur} ${money(inv.balance)}</strong></div>
       </div>
       <div class="grid grid-2">
         <div class="field">
-          <label>Amount paid (total to date)</label>
-          <input type="number" step="0.01" min="0" id="m-paid" value="${inv.amount_paid}">
-          <div class="hint"><a href="#" id="m-full">Mark as fully paid</a></div>
+          <label>Amount now *</label>
+          <input type="number" step="0.01" min="0" id="m-amount" value="${inv.balance > 0 ? inv.balance : ''}">
+          <div class="hint"><a href="#" id="m-full">Settle the full balance</a></div>
         </div>
         <div class="field">
-          <label>Payment date</label>
-          <input type="date" id="m-date" value="${esc(inv.payment_date || today())}">
+          <label>Paid on</label>
+          <input type="date" id="m-date" value="${today()}">
         </div>
       </div>
       <div class="grid grid-2">
         <div class="field">
           <label>Method</label>
           <select id="m-method">
-            ${methods
-              .map(
-                (m) =>
-                  `<option value="${esc(m)}" ${inv.payment_method === m ? 'selected' : ''}>${
-                    m || '— select —'
-                  }</option>`
-              )
-              .join('')}
+            ${PAYMENT_METHODS.map((m) => `<option value="${esc(m)}">${m || '— select —'}</option>`).join('')}
           </select>
         </div>
         <div class="field">
           <label>Reference / TrxID</label>
-          <input type="text" id="m-ref" value="${esc(inv.payment_ref)}">
+          <input type="text" id="m-ref" placeholder="e.g. BKH8842013">
         </div>
       </div>
-      <div class="field">
-        <label>Status</label>
-        <select id="m-status">
-          ${['auto', 'draft', 'cancelled']
-            .map(
-              (s) =>
-                `<option value="${s}" ${
-                  (s === 'auto' && !['draft', 'cancelled'].includes(inv.status)) || inv.status === s
-                    ? 'selected'
-                    : ''
-                }>${s === 'auto' ? 'Automatic (from amount paid)' : s[0].toUpperCase() + s.slice(1)}</option>`
-            )
-            .join('')}
-        </select>
+      <div class="field" style="margin-bottom:0">
+        <label>Note</label>
+        <input type="text" id="m-note" placeholder="Optional, e.g. 1st installment">
       </div>`,
     onConfirm: async (root, close) => {
-      await api(`/invoices/${id}/payment`, {
+      const updated = await api(`/invoices/${inv.id}/payments`, {
         method: 'POST',
         body: {
-          amount_paid: $('#m-paid', root).value,
-          payment_method: $('#m-method', root).value,
-          payment_ref: $('#m-ref', root).value,
-          payment_date: $('#m-date', root).value,
-          status: $('#m-status', root).value,
+          amount: $('#m-amount', root).value,
+          paid_on: $('#m-date', root).value,
+          method: $('#m-method', root).value,
+          reference: $('#m-ref', root).value,
+          note: $('#m-note', root).value,
         },
       });
       close();
-      toast('Payment recorded.');
-      await renderInvoiceList();
+      toast(`Payment of ${money(updated.amount_paid - inv.amount_paid)} recorded.`);
+      await onDone(updated);
     },
   });
 
   $('#m-full').addEventListener('click', (e) => {
     e.preventDefault();
-    $('#m-paid').value = inv.total;
+    $('#m-amount').value = inv.balance;
   });
+}
+
+async function paymentModal(id) {
+  const inv = await api(`/invoices/${id}`);
+  addPaymentModal(inv, async () => renderInvoiceList());
 }
 
 /* ---------------------------------------------------------- invoice editor */
 
-async function viewInvoiceForm(id) {
+async function viewInvoiceForm(id, presetClientId) {
   const editing = Boolean(id);
+  const preset = presetClientId ? state.clients.find((c) => String(c.id) === presetClientId) : null;
   const inv = editing
     ? await api(`/invoices/${id}`)
     : {
         invoice_no: '',
-        client_id: null,
-        client_name: '',
-        client_org: '',
-        client_email: '',
-        client_phone: '',
-        client_address: '',
+        client_id: preset ? preset.id : null,
+        client_name: preset ? preset.name : '',
+        client_org: preset ? preset.organisation : '',
+        client_email: preset ? preset.email : '',
+        client_phone: preset ? preset.phone : '',
+        client_address: preset ? preset.address : '',
         issue_date: today(),
         due_date: addDays(today(), 7),
         currency: state.settings.currency,
@@ -501,7 +492,11 @@ async function viewInvoiceForm(id) {
         notes: '',
         terms: state.settings.default_terms,
         items: [],
+        payments: [],
       };
+
+  // When editing, the payments ledger owns this figure — not a form field.
+  let paidToDate = num(inv.amount_paid);
 
   setPage(
     editing ? `Invoice ${inv.invoice_no}` : 'New invoice',
@@ -634,47 +629,51 @@ async function viewInvoiceForm(id) {
 
       <div class="grid grid-2" style="align-items:start">
         <div class="card">
-          <div class="card-head"><h2>Payment &amp; terms</h2></div>
+          <div class="card-head">
+            <h2>Payments &amp; terms</h2>
+            ${editing ? '<button type="button" class="btn btn-sm" id="add-payment">＋ Record payment</button>' : ''}
+          </div>
           <div class="card-body">
-            <div class="grid grid-2">
-              <div class="field">
-                <label>Amount paid</label>
-                <input type="number" step="0.01" min="0" id="amount_paid" value="${inv.amount_paid}">
-              </div>
-              <div class="field">
-                <label>Status</label>
-                <select id="status">
-                  <option value="auto" ${
-                    !['draft', 'cancelled'].includes(inv.status) ? 'selected' : ''
-                  }>Automatic (from amount paid)</option>
-                  <option value="draft" ${inv.status === 'draft' ? 'selected' : ''}>Draft</option>
-                  <option value="cancelled" ${inv.status === 'cancelled' ? 'selected' : ''}>Cancelled</option>
-                </select>
-              </div>
+            <div class="field">
+              <label>Status</label>
+              <select id="status">
+                <option value="auto" ${
+                  !['draft', 'cancelled'].includes(inv.status) ? 'selected' : ''
+                }>Automatic (from payments received)</option>
+                <option value="draft" ${inv.status === 'draft' ? 'selected' : ''}>Draft</option>
+                <option value="cancelled" ${inv.status === 'cancelled' ? 'selected' : ''}>Cancelled</option>
+              </select>
             </div>
-            <div class="grid grid-3">
-              <div class="field">
-                <label>Method</label>
-                <select id="payment_method">
-                  ${['', 'bKash', 'Nagad', 'Rocket', 'Bank transfer', 'Cash', 'Cheque', 'Card', 'Other']
-                    .map(
-                      (m) =>
-                        `<option value="${esc(m)}" ${inv.payment_method === m ? 'selected' : ''}>${
-                          m || '—'
-                        }</option>`
-                    )
-                    .join('')}
-                </select>
-              </div>
-              <div class="field">
-                <label>Reference</label>
-                <input type="text" id="payment_ref" value="${esc(inv.payment_ref)}">
-              </div>
-              <div class="field">
-                <label>Paid on</label>
-                <input type="date" id="payment_date" value="${esc(inv.payment_date)}">
-              </div>
-            </div>
+
+            ${
+              editing
+                ? `<div class="field">
+                     <label>Payments received</label>
+                     <div id="payments-list"></div>
+                   </div>`
+                : `<div class="grid grid-3">
+                     <div class="field">
+                       <label>Initial payment</label>
+                       <input type="number" step="0.01" min="0" id="amount_paid" value="0">
+                     </div>
+                     <div class="field">
+                       <label>Method</label>
+                       <select id="payment_method">
+                         ${['', 'bKash', 'Nagad', 'Rocket', 'Bank transfer', 'Cash', 'Cheque', 'Card', 'Other']
+                           .map((m) => `<option value="${esc(m)}">${m || '—'}</option>`)
+                           .join('')}
+                       </select>
+                     </div>
+                     <div class="field">
+                       <label>Paid on</label>
+                       <input type="date" id="payment_date" value="">
+                     </div>
+                   </div>
+                   <div class="hint" style="margin:-8px 0 14px">
+                     Optional. Once saved you can record further payments as installments.
+                   </div>`
+            }
+
             <div class="field" style="margin-bottom:0">
               <label>Terms &amp; conditions</label>
               <textarea id="terms" rows="3">${esc(inv.terms)}</textarea>
@@ -790,7 +789,7 @@ async function viewInvoiceForm(id) {
     const taxRate = Math.max(0, num($('#tax_rate').value));
     const tax = round2((taxable * taxRate) / 100);
     const total = round2(taxable + tax);
-    const paid = Math.max(0, round2(num($('#amount_paid').value)));
+    const paid = editing ? paidToDate : Math.max(0, round2(num($('#amount_paid').value)));
     const balance = round2(total - paid);
 
     $('#totals').innerHTML = `
@@ -813,12 +812,75 @@ async function viewInvoiceForm(id) {
       ${
         paid > 0
           ? `<div class="total-line"><span>Paid</span><strong>− ${money(paid)}</strong></div>
-             <div class="total-line due"><span>Balance due</span><strong>${cur} ${money(balance)}</strong></div>`
+             <div class="total-line ${balance > 0 ? 'due' : ''}"><span>${
+               balance > 0 ? 'Balance due' : 'Settled in full'
+             }</span><strong>${cur} ${money(balance)}</strong></div>`
           : ''
       }`;
   }
 
   (inv.items.length ? inv.items : [{}]).forEach((it) => linesBody.appendChild(lineRow(it)));
+
+  /* ---- payments ledger (existing invoices only) ---- */
+
+  function renderPayments(payments) {
+    const box = $('#payments-list');
+    if (!box) return;
+
+    box.innerHTML = payments.length
+      ? `<table class="data payments-table">
+           <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th class="num">Amount</th><th></th></tr></thead>
+           <tbody>${payments
+             .map(
+               (p) => `<tr>
+                 <td>${prettyDate(p.paid_on)}</td>
+                 <td>${esc(p.method) || '—'}</td>
+                 <td class="mono">${esc(p.reference) || '—'}${
+                   p.note ? `<div class="hint">${esc(p.note)}</div>` : ''
+                 }</td>
+                 <td class="num mono strong">${money(p.amount)}</td>
+                 <td class="num"><button type="button" class="icon-btn" data-delpay="${p.id}"
+                     title="Delete this payment">×</button></td>
+               </tr>`
+             )
+             .join('')}</tbody>
+           <tfoot><tr>
+             <td colspan="3" class="strong">Total received</td>
+             <td class="num mono strong">${money(payments.reduce((s, p) => s + p.amount, 0))}</td>
+             <td></td>
+           </tr></tfoot>
+         </table>`
+      : `<div class="hint" style="padding:10px 0">No payments recorded yet.</div>`;
+
+    $$('[data-delpay]', box).forEach((b) =>
+      b.addEventListener('click', () =>
+        confirmDialog(
+          'Delete payment',
+          'Remove this payment from the ledger? The invoice balance and the client statement will update.',
+          async () => {
+            const updated = await api(`/invoices/${id}/payments/${b.dataset.delpay}`, {
+              method: 'DELETE',
+            });
+            paidToDate = num(updated.amount_paid);
+            renderPayments(updated.payments);
+            recalc();
+            toast('Payment deleted.');
+          }
+        )
+      )
+    );
+  }
+
+  if (editing) {
+    renderPayments(inv.payments || []);
+    $('#add-payment').addEventListener('click', () =>
+      addPaymentModal(inv, async (updated) => {
+        paidToDate = num(updated.amount_paid);
+        renderPayments(updated.payments);
+        recalc();
+      })
+    );
+  }
 
   $('#add-line').addEventListener('click', () => {
     linesBody.appendChild(lineRow());
@@ -857,7 +919,7 @@ async function viewInvoiceForm(id) {
   });
 
   ['#discount_value', '#discount_type', '#tax_rate', '#tax_label', '#amount_paid', '#currency'].forEach(
-    (sel) => $(sel).addEventListener('input', recalc)
+    (sel) => $(sel)?.addEventListener('input', recalc)
   );
   $('#discount_type').addEventListener('change', recalc);
 
@@ -887,14 +949,19 @@ async function viewInvoiceForm(id) {
       discount_value: $('#discount_value').value,
       tax_label: $('#tax_label').value,
       tax_rate: $('#tax_rate').value,
-      amount_paid: $('#amount_paid').value,
       status: $('#status').value,
-      payment_method: $('#payment_method').value,
-      payment_ref: $('#payment_ref').value,
-      payment_date: $('#payment_date').value,
       notes: $('#notes').value,
       terms: $('#terms').value,
       items: readLines(),
+      // Only a brand new invoice can carry an opening payment; on an existing
+      // one the ledger is the only way money goes in or out.
+      ...(editing
+        ? {}
+        : {
+            amount_paid: $('#amount_paid').value,
+            payment_method: $('#payment_method').value,
+            payment_date: $('#payment_date').value,
+          }),
     };
 
     try {
@@ -919,24 +986,39 @@ async function viewClients() {
 
   const render = async () => {
     state.clients = await api('/clients');
+    const totalDue = state.clients.reduce((s, c) => s + num(c.due), 0);
+
     view.innerHTML = `<div class="card">${
       state.clients.length
         ? `<div class="table-wrap"><table class="data">
-             <thead><tr><th>Name</th><th>Organisation</th><th>Contact</th><th>Address</th><th></th></tr></thead>
+             <thead><tr>
+               <th>Name</th><th>Organisation</th><th>Contact</th>
+               <th class="num">Invoices</th><th class="num">Billed</th>
+               <th class="num">Paid</th><th class="num">Due</th><th></th>
+             </tr></thead>
              <tbody>${state.clients
                .map(
                  (c) => `<tr>
-                   <td class="strong">${esc(c.name)}</td>
+                   <td><a class="strong" href="#/client/${c.id}">${esc(c.name)}</a></td>
                    <td>${esc(c.organisation) || '—'}</td>
                    <td>${esc(c.phone) || '—'}${c.email ? `<div class="hint">${esc(c.email)}</div>` : ''}</td>
-                   <td>${esc(c.address) || '—'}</td>
+                   <td class="num mono">${c.invoice_count}</td>
+                   <td class="num mono">${money(c.billed)}</td>
+                   <td class="num mono">${money(c.paid)}</td>
+                   <td class="num mono strong ${num(c.due) > 0 ? 'due-amount' : ''}">${money(c.due)}</td>
                    <td class="num">
+                     <a class="btn btn-sm" href="#/client/${c.id}">Statement</a>
                      <button class="btn btn-sm" data-edit="${c.id}">Edit</button>
                      <button class="btn btn-sm btn-danger" data-del="${c.id}">Remove</button>
                    </td>
                  </tr>`
                )
                .join('')}</tbody>
+             <tfoot><tr>
+               <td colspan="6" class="strong">Total outstanding across all clients</td>
+               <td class="num mono strong due-amount">${money(totalDue)}</td>
+               <td></td>
+             </tr></tfoot>
            </table></div>`
         : `<div class="empty">
              <div class="empty-title">No clients saved</div>
@@ -971,7 +1053,10 @@ async function viewClients() {
 }
 
 function clientModal(client, onDone) {
-  const c = client || { name: '', organisation: '', email: '', phone: '', address: '', notes: '' };
+  const c = client || {
+    name: '', organisation: '', email: '', phone: '', address: '', notes: '',
+    opening_balance: 0, opening_balance_note: '',
+  };
   modal({
     title: client ? 'Edit client' : 'Add client',
     confirmLabel: client ? 'Save changes' : 'Add client',
@@ -983,6 +1068,20 @@ function clientModal(client, onDone) {
       </div>
       <div class="field"><label>Email</label><input type="text" id="c-email" value="${esc(c.email)}"></div>
       <div class="field"><label>Address</label><textarea id="c-address" rows="2">${esc(c.address)}</textarea></div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label>Opening balance</label>
+          <input type="number" step="0.01" id="c-opening" value="${num(c.opening_balance)}">
+          <div class="hint">Money already owed before this system. Added on top of their invoices.</div>
+        </div>
+        <div class="field">
+          <label>Why</label>
+          <input type="text" id="c-opening-note" value="${esc(c.opening_balance_note)}"
+                 placeholder="e.g. dues carried over from 2025">
+        </div>
+      </div>
+
       <div class="field" style="margin-bottom:0"><label>Internal notes</label><textarea id="c-notes" rows="2">${esc(
         c.notes
       )}</textarea></div>`,
@@ -994,6 +1093,8 @@ function clientModal(client, onDone) {
         phone: $('#c-phone', root).value,
         address: $('#c-address', root).value,
         notes: $('#c-notes', root).value,
+        opening_balance: $('#c-opening', root).value,
+        opening_balance_note: $('#c-opening-note', root).value,
       };
       if (client) await api(`/clients/${client.id}`, { method: 'PUT', body });
       else await api('/clients', { method: 'POST', body });
@@ -1002,6 +1103,134 @@ function clientModal(client, onDone) {
       await onDone();
     },
   });
+}
+
+/* ------------------------------------------------------ client statement */
+
+async function viewClientStatement(id) {
+  view.innerHTML = '<div class="empty">Loading…</div>';
+  const { client, totals, invoices, payments } = await api(`/clients/${id}/statement`);
+  const cur = state.settings.currency;
+
+  setPage(
+    client.name,
+    [client.organisation, client.phone, client.email].filter(Boolean).join(' · ') || 'Client statement',
+    `<button class="btn" id="edit-client">Edit client</button>
+     <a class="btn btn-primary" href="#/invoice/new?client=${client.id}">＋ New invoice</a>`
+  );
+
+  view.innerHTML = `
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Opening balance</div>
+        <div class="stat-value">${cur} ${money(totals.opening_balance)}</div>
+        <div class="stat-note">${esc(client.opening_balance_note) || 'Carried forward'}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Billed on invoices</div>
+        <div class="stat-value">${cur} ${money(totals.billed)}</div>
+        <div class="stat-note">${totals.invoice_count} invoice${totals.invoice_count === 1 ? '' : 's'}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Paid</div>
+        <div class="stat-value">${cur} ${money(totals.paid)}</div>
+        <div class="stat-note">${payments.length} payment${payments.length === 1 ? '' : 's'}</div>
+      </div>
+      <div class="stat accent-red">
+        <div class="stat-label">Total due</div>
+        <div class="stat-value">${cur} ${money(totals.due)}</div>
+        <div class="stat-note">${
+          totals.overdue.n
+            ? `${totals.overdue.n} overdue · ${money(totals.overdue.amount)}`
+            : 'nothing overdue'
+        }</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head"><h2>How the total due is made up</h2></div>
+      <div class="card-body">
+        <div class="totals-box" style="max-width:460px">
+          <div class="total-line"><span>Opening balance</span><strong>${money(totals.opening_balance)}</strong></div>
+          <div class="total-line"><span>Billed on invoices</span><strong>+ ${money(totals.billed)}</strong></div>
+          <div class="total-line"><span>Payments received</span><strong>− ${money(totals.paid)}</strong></div>
+          <div class="total-line grand"><span>Total due</span><span>${cur} ${money(totals.due)}</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head"><h2>Invoices under this client</h2></div>
+      ${
+        invoices.length
+          ? `<div class="table-wrap"><table class="data">
+               <thead><tr>
+                 <th>Invoice</th><th>Issued</th><th>Due</th>
+                 <th class="num">Total</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th><th></th>
+               </tr></thead>
+               <tbody>${invoices
+                 .map(
+                   (inv) => `<tr>
+                     <td><a class="strong" href="#/invoice/${inv.id}/edit">${esc(inv.invoice_no)}</a></td>
+                     <td>${prettyDate(inv.issue_date)}</td>
+                     <td>${prettyDate(inv.due_date)}</td>
+                     <td class="num mono">${money(inv.total)}</td>
+                     <td class="num mono">${money(inv.amount_paid)}</td>
+                     <td class="num mono strong ${inv.balance > 0 ? 'due-amount' : ''}">${money(inv.balance)}</td>
+                     <td>${statusPill(inv)}</td>
+                     <td class="num"><a class="btn btn-sm" href="/invoice/${inv.id}" target="_blank" rel="noopener">Print</a></td>
+                   </tr>`
+                 )
+                 .join('')}</tbody>
+               <tfoot><tr>
+                 <td colspan="3" class="strong">${invoices.length} invoice${invoices.length === 1 ? '' : 's'}</td>
+                 <td class="num mono strong">${money(invoices.reduce((s, i) => s + i.total, 0))}</td>
+                 <td class="num mono strong">${money(invoices.reduce((s, i) => s + i.amount_paid, 0))}</td>
+                 <td class="num mono strong due-amount">${money(invoices.reduce((s, i) => s + i.balance, 0))}</td>
+                 <td colspan="2"></td>
+               </tr></tfoot>
+             </table></div>`
+          : `<div class="empty"><div class="empty-title">No invoices yet</div>
+               <div>Raise one and it will appear here.</div></div>`
+      }
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Payment breakdown</h2></div>
+      ${
+        payments.length
+          ? `<div class="table-wrap"><table class="data">
+               <thead><tr>
+                 <th>Date</th><th>Against invoice</th><th>Method</th><th>Reference</th><th>Note</th><th class="num">Amount</th>
+               </tr></thead>
+               <tbody>${payments
+                 .map(
+                   (p) => `<tr>
+                     <td>${prettyDate(p.paid_on)}</td>
+                     <td><a href="#/invoice/${p.invoice_id}/edit">${esc(p.invoice_no)}</a></td>
+                     <td>${esc(p.method) || '—'}</td>
+                     <td class="mono">${esc(p.reference) || '—'}</td>
+                     <td>${esc(p.note) || '—'}</td>
+                     <td class="num mono strong">${money(p.amount)}</td>
+                   </tr>`
+                 )
+                 .join('')}</tbody>
+               <tfoot><tr>
+                 <td colspan="5" class="strong">Total received</td>
+                 <td class="num mono strong">${money(totals.paid)}</td>
+               </tr></tfoot>
+             </table></div>`
+          : `<div class="empty"><div class="empty-title">No payments recorded</div>
+               <div>Record one from an invoice and it will show up here.</div></div>`
+      }
+    </div>`;
+
+  $('#edit-client').addEventListener('click', () =>
+    clientModal(client, async () => {
+      await loadReference();
+      await viewClientStatement(id);
+    })
+  );
 }
 
 /* ------------------------------------------------------------ programmes */
@@ -1258,9 +1487,10 @@ async function viewSettings() {
 const ROUTES = [
   [/^#?\/?dashboard?$/, () => viewDashboard(), 'dashboard'],
   [/^#\/invoices$/, () => viewInvoices(), 'invoices'],
-  [/^#\/invoice\/new$/, () => viewInvoiceForm(null), 'invoice-new'],
+  [/^#\/invoice\/new(\?client=(\d+))?$/, (m) => viewInvoiceForm(null, m[2]), 'invoice-new'],
   [/^#\/invoice\/(\d+)\/edit$/, (m) => viewInvoiceForm(m[1]), 'invoices'],
   [/^#\/clients$/, () => viewClients(), 'clients'],
+  [/^#\/client\/(\d+)$/, (m) => viewClientStatement(m[1]), 'clients'],
   [/^#\/programmes$/, () => viewProgrammes(), 'programmes'],
   [/^#\/settings$/, () => viewSettings(), 'settings'],
 ];

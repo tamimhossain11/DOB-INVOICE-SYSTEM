@@ -102,11 +102,38 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   position     INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS payments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  amount     REAL NOT NULL DEFAULT 0,
+  paid_on    TEXT NOT NULL,
+  method     TEXT NOT NULL DEFAULT '',
+  reference  TEXT NOT NULL DEFAULT '',
+  note       TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(paid_on);
 CREATE INDEX IF NOT EXISTS idx_items_invoice ON invoice_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
 CREATE INDEX IF NOT EXISTS idx_invoices_issue ON invoices(issue_date);
 `);
+
+/* -------------------------------------------------------------- migrations */
+
+/** Adds a column to an existing table only if it is not already there. */
+function addColumnIfMissing(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((c) => c.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
+}
+
+// Money a client already owed before they were entered into this system.
+addColumnIfMissing('clients', 'opening_balance', 'REAL NOT NULL DEFAULT 0');
+addColumnIfMissing('clients', 'opening_balance_note', "TEXT NOT NULL DEFAULT ''");
 
 /* ---------------------------------------------------------------- settings */
 
@@ -161,6 +188,41 @@ function getSettings() {
 function bootstrap() {
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     if (!getSettingStmt.get(key)) setSetting(key, value);
+  }
+
+  // Invoices raised before the payments ledger existed carry their total in
+  // amount_paid. Turn each into a single opening payment row so no history is
+  // lost and amount_paid can become a derived value from here on.
+  if (getSetting('_payments_backfilled', '') !== '1') {
+    const legacy = db
+      .prepare(
+        `SELECT i.id, i.amount_paid, i.payment_method, i.payment_ref, i.payment_date, i.issue_date
+         FROM invoices i
+         LEFT JOIN payments p ON p.invoice_id = i.id
+         WHERE i.amount_paid > 0 AND p.id IS NULL`
+      )
+      .all();
+
+    if (legacy.length) {
+      const insert = db.prepare(
+        `INSERT INTO payments (invoice_id, amount, paid_on, method, reference, note)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      );
+      db.transaction(() => {
+        for (const inv of legacy) {
+          insert.run(
+            inv.id,
+            inv.amount_paid,
+            inv.payment_date || inv.issue_date,
+            inv.payment_method,
+            inv.payment_ref,
+            'Migrated from the invoice payment field'
+          );
+        }
+      })();
+      console.log(`  Migrated ${legacy.length} existing payment(s) into the ledger.`);
+    }
+    setSetting('_payments_backfilled', '1');
   }
 
   const adminCount = db.prepare('SELECT COUNT(*) AS n FROM admins').get().n;

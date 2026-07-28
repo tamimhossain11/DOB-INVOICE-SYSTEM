@@ -2,8 +2,9 @@
 
 const express = require('express');
 const { db, getSettings, nextInvoiceNumber } = require('../db');
-const { computeTotals, deriveStatus, num, round2 } = require('../calc');
+const { computeTotals, num, round2 } = require('../calc');
 const { amountInWords } = require('../words');
+const { recomputeInvoice, listPayments } = require('../payments');
 
 const router = express.Router();
 
@@ -14,6 +15,7 @@ function withItems(invoice) {
   invoice.items = db
     .prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY position, id')
     .all(invoice.id);
+  invoice.payments = listPayments(invoice.id);
   invoice.balance = round2(invoice.total - invoice.amount_paid);
   // Spelled out here rather than in the browser so the wording stays canonical.
   invoice.amount_in_words = amountInWords(invoice.total, invoice.currency);
@@ -65,11 +67,9 @@ function readInvoice(body) {
       tax_rate: round2(num(body.tax_rate)),
       tax_amount: totals.tax_amount,
       total: totals.total,
-      amount_paid: totals.amount_paid,
-      status: deriveStatus(body.status, totals.total, totals.amount_paid),
-      payment_method: String(body.payment_method || '').trim(),
-      payment_ref: String(body.payment_ref || '').trim(),
-      payment_date: String(body.payment_date || '').trim(),
+      // amount_paid and the payment summary fields are never taken from the
+      // request — they are recomputed from the payments ledger after saving.
+      status: body.status === 'draft' || body.status === 'cancelled' ? body.status : 'unpaid',
       notes: String(body.notes || '').trim(),
       terms: String(body.terms ?? settings.default_terms).trim(),
     },
@@ -185,22 +185,37 @@ router.post('/', (req, res) => {
         `INSERT INTO invoices (
            invoice_no, client_id, client_name, client_org, client_email, client_phone, client_address,
            issue_date, due_date, currency, subtotal, discount_type, discount_value, discount_amount,
-           tax_label, tax_rate, tax_amount, total, amount_paid, status,
-           payment_method, payment_ref, payment_date, notes, terms
+           tax_label, tax_rate, tax_amount, total, status, notes, terms
          ) VALUES (
            @invoice_no, @client_id, @client_name, @client_org, @client_email, @client_phone, @client_address,
            @issue_date, @due_date, @currency, @subtotal, @discount_type, @discount_value, @discount_amount,
-           @tax_label, @tax_rate, @tax_amount, @total, @amount_paid, @status,
-           @payment_method, @payment_ref, @payment_date, @notes, @terms
+           @tax_label, @tax_rate, @tax_amount, @total, @status, @notes, @terms
          )`
       )
       .run({ ...fields, invoice_no });
     replaceItems(info.lastInsertRowid, items);
+
+    // Convenience for API callers: an amount_paid sent on create becomes the
+    // first entry in the ledger rather than a bare number on the invoice.
+    const initial = round2(num(req.body.amount_paid));
+    if (initial > 0) {
+      db.prepare(
+        `INSERT INTO payments (invoice_id, amount, paid_on, method, reference)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run(
+        info.lastInsertRowid,
+        initial,
+        String(req.body.payment_date || '').trim() || fields.issue_date,
+        String(req.body.payment_method || '').trim(),
+        String(req.body.payment_ref || '').trim()
+      );
+    }
     return info.lastInsertRowid;
   });
 
   try {
     const id = create();
+    recomputeInvoice(id);
     res.status(201).json(withItems(db.prepare('SELECT * FROM invoices WHERE id = ?').get(id)));
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
@@ -228,8 +243,7 @@ router.put('/:id', (req, res) => {
          issue_date=@issue_date, due_date=@due_date, currency=@currency,
          subtotal=@subtotal, discount_type=@discount_type, discount_value=@discount_value,
          discount_amount=@discount_amount, tax_label=@tax_label, tax_rate=@tax_rate,
-         tax_amount=@tax_amount, total=@total, amount_paid=@amount_paid, status=@status,
-         payment_method=@payment_method, payment_ref=@payment_ref, payment_date=@payment_date,
+         tax_amount=@tax_amount, total=@total, status=@status,
          notes=@notes, terms=@terms, updated_at=datetime('now')
        WHERE id=@id`
     ).run({ ...fields, id: existing.id });
@@ -237,31 +251,66 @@ router.put('/:id', (req, res) => {
   });
 
   update();
+  // Editing an invoice can change its total, which changes whether the money
+  // already received leaves it paid, partly paid or unpaid.
+  recomputeInvoice(existing.id);
   res.json(withItems(db.prepare('SELECT * FROM invoices WHERE id = ?').get(existing.id)));
 });
 
-/* ---------------------------------------------------------- record payment */
+/* ---------------------------------------------------------------- payments */
 
-router.post('/:id/payment', (req, res) => {
-  const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Invoice not found.' });
+router.get('/:id/payments', (req, res) => {
+  const invoice = db.prepare('SELECT id FROM invoices WHERE id = ?').get(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found.' });
+  res.json(listPayments(invoice.id));
+});
 
-  const paid = Math.max(0, round2(num(req.body.amount_paid)));
-  const status = deriveStatus(req.body.status, existing.total, paid);
+/** Records one payment. Several payments against an invoice are installments. */
+router.post('/:id/payments', (req, res) => {
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found.' });
+
+  const amount = round2(num(req.body.amount));
+  if (amount <= 0) return res.status(400).json({ error: 'Enter a payment amount above zero.' });
 
   db.prepare(
-    `UPDATE invoices SET amount_paid=?, status=?, payment_method=?, payment_ref=?, payment_date=?,
-     updated_at=datetime('now') WHERE id=?`
+    `INSERT INTO payments (invoice_id, amount, paid_on, method, reference, note)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
-    paid,
-    status,
-    String(req.body.payment_method || existing.payment_method || '').trim(),
-    String(req.body.payment_ref || existing.payment_ref || '').trim(),
-    String(req.body.payment_date || existing.payment_date || '').trim(),
-    existing.id
+    invoice.id,
+    amount,
+    String(req.body.paid_on || '').trim() || new Date().toISOString().slice(0, 10),
+    String(req.body.method || '').trim(),
+    String(req.body.reference || '').trim(),
+    String(req.body.note || '').trim()
   );
 
-  res.json(withItems(db.prepare('SELECT * FROM invoices WHERE id = ?').get(existing.id)));
+  recomputeInvoice(invoice.id);
+  res.status(201).json(withItems(db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id)));
+});
+
+router.delete('/:id/payments/:paymentId', (req, res) => {
+  const payment = db
+    .prepare('SELECT * FROM payments WHERE id = ? AND invoice_id = ?')
+    .get(req.params.paymentId, req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found.' });
+
+  db.prepare('DELETE FROM payments WHERE id = ?').run(payment.id);
+  recomputeInvoice(payment.invoice_id);
+  res.json(withItems(db.prepare('SELECT * FROM invoices WHERE id = ?').get(payment.invoice_id)));
+});
+
+/** Sets draft / cancelled, or hands the invoice back to automatic status. */
+router.post('/:id/status', (req, res) => {
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found.' });
+
+  const requested = String(req.body.status || 'auto');
+  const status = requested === 'draft' || requested === 'cancelled' ? requested : 'unpaid';
+  db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, invoice.id);
+
+  recomputeInvoice(invoice.id);
+  res.json(withItems(db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id)));
 });
 
 /* ---------------------------------------------------------------- delete */

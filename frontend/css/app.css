@@ -262,6 +262,18 @@ table.data tbody tr:hover td { background: #fafcfb; }
 .pill-cancelled { background: #eef1ef; color: var(--muted); }
 .pill-overdue { background: var(--red); color: #fff; margin-left: 6px; }
 
+.due-amount { color: var(--red); }
+
+table.data tfoot td {
+  border-top: 2px solid var(--line);
+  background: #fbfdfc;
+  padding: 11px 14px;
+}
+
+/* Compact payments ledger inside the invoice editor */
+.payments-table th, .payments-table td { padding: 7px 8px; font-size: 13px; }
+.payments-table tfoot td { padding: 8px; }
+
 .empty { padding: 44px 20px; text-align: center; color: var(--muted); }
 .empty-title { font-weight: 700; color: var(--ink); margin-bottom: 4px; }
 
