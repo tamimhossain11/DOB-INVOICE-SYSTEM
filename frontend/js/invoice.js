@@ -96,13 +96,43 @@ function renderInvoice(invoice, settings) {
       ? `<tr class="balance"><td>Balance due</td><td class="v">${money(balance, cur)}</td></tr>`
       : '';
 
-  const paymentMeta = [
-    invoice.payment_method && `Method: ${esc(invoice.payment_method)}`,
-    invoice.payment_ref && `Ref: ${esc(invoice.payment_ref)}`,
-    invoice.payment_date && `Date: ${prettyDate(invoice.payment_date)}`,
-  ]
-    .filter(Boolean)
-    .join(' &nbsp;•&nbsp; ');
+  // Every payment against this invoice, so the client can see exactly what
+  // they have paid, when, and what is still outstanding.
+  const payments = invoice.payments || [];
+  const paymentsBlock = payments.length
+    ? `<div class="block">
+         <div class="block-label">Payments received</div>
+         <table class="payments">
+           <thead>
+             <tr><th>Date</th><th>Method</th><th>Reference</th><th class="p-amt">Amount (${esc(cur)})</th></tr>
+           </thead>
+           <tbody>
+             ${payments
+               .map(
+                 (p) => `<tr>
+                   <td>${prettyDate(p.paid_on)}</td>
+                   <td>${esc(p.method) || '—'}</td>
+                   <td>${esc(p.reference) || '—'}${
+                     p.note ? `<div class="p-note">${esc(p.note)}</div>` : ''
+                   }</td>
+                   <td class="p-amt">${money(p.amount, cur)}</td>
+                 </tr>`
+               )
+               .join('')}
+           </tbody>
+           <tfoot>
+             <tr>
+               <td colspan="3">Total paid</td>
+               <td class="p-amt">${money(invoice.amount_paid, cur)}</td>
+             </tr>
+             <tr class="${balance > 0 ? 'p-due' : 'p-settled'}">
+               <td colspan="3">${balance > 0 ? 'Balance still due' : 'Settled in full'}</td>
+               <td class="p-amt">${money(balance, cur)}</td>
+             </tr>
+           </tfoot>
+         </table>
+       </div>`
+    : '';
 
   return `
     <div class="sheet">
@@ -180,14 +210,7 @@ function renderInvoice(invoice, settings) {
                  </div>`
               : ''
           }
-          ${
-            paymentMeta
-              ? `<div class="block">
-                   <div class="block-label">Payment received</div>
-                   <div class="block-body">${paymentMeta}</div>
-                 </div>`
-              : ''
-          }
+          ${paymentsBlock}
           ${
             invoice.notes
               ? `<div class="block">
